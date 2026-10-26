@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allocator, emptyState, foldEvent, labelText } from "../lib/labels.js";
+import { allocator, emptyState, foldEvent, labelContent } from "../lib/labels.js";
 
 export const SESSIONS_ROOT = path.join(os.homedir(), ".local/share/deepseek-harness/sessions");
 export const LABELED_TOOLS = new Set(["web_search", "advanced_search", "platform_search", "web_fetch"]);
@@ -59,7 +59,7 @@ export function replayLabels(events) {
     let event = e;
     if (e.type === "tool/result" && LABELED_TOOLS.has(calls.get(e.data.message.toolCallId)) && !e.data.message.isError) {
       const alloc = allocator(state);
-      const content = e.data.message.content.map((c) => (c.type === "text" ? { ...c, text: labelText(c.text, alloc.labelFor) } : c));
+      const content = labelContent(e.data.message.content, alloc.labelFor);
       event = { ...e, data: { ...e.data, message: { ...e.data.message, content } } };
       labeledResults++;
     }
