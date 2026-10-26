@@ -55,6 +55,19 @@ if [ ${#PNPM[@]} -eq 0 ] && command -v pnpm >/dev/null && [ "$(cd /tmp && pnpm -
 fi
 [ ${#PNPM[@]} -gt 0 ] || die "no pnpm $WANT_PNPM found (app runtime under $DSH_HOME/dsh-runtimes or $APP_DIR, or PATH)"
 echo "using pnpm $WANT_PNPM: ${PNPM[*]}"
+
+# Network precheck: the selected pnpm's node must reach the npm registry (we no longer install offline).
+NODE="${PNPM[0]}"
+[ "$NODE" = pnpm ] && NODE="$(command -v node)"
+[ -x "$NODE" ] || die "network precheck: cannot find a node binary (PNPM[0]=$NODE)"
+"$NODE" -e "
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 10000);
+  fetch('https://registry.npmjs.org/@deepseek-ai%2fcosmokit', { signal: c.signal })
+    .then(r => { clearTimeout(t); process.exit(r.ok ? 0 : 1); })
+    .catch(e => { clearTimeout(t); console.error('registry fetch failed:', e.message); process.exit(1); });
+" || die "network precheck failed: could not fetch https://registry.npmjs.org/@deepseek-ai/cosmokit within 10 s; this install needs network (no --offline), check connectivity and retry"
+
 grep -q "\"$NAME\"" "$PROFILE/package.json" && die "$NAME is already in $PROFILE/package.json"
 
 # 2. Gate on the package's own tests (real session logs, no network).
@@ -122,7 +135,13 @@ for dir in "$PROFILE"/node_modules/dsh-*; do
   pkg="$(basename "$dir")"
   BEFORE[$pkg]="$(fingerprint "$pkg")"
 done
-(cd "$PROFILE" && "${PNPM[@]}" install --offline)
+
+# Lockfile guard: the install must not change any locked package or importer dependency outside $NAME.
+BEFORE_LOCK="$PACK_DIR/lockfile.before"
+AFTER_LOCK="$PACK_DIR/lockfile.after"
+python3 "$PKG_DIR/lockfile_guard.py" "$PROFILE/pnpm-lock.yaml" "$NAME" > "$BEFORE_LOCK" \
+  || die "lockfile guard: cannot extract pinned set from $PROFILE/pnpm-lock.yaml"
+(cd "$PROFILE" && "${PNPM[@]}" install)
 for pkg in "${!BEFORE[@]}"; do
   if [ ! -d "$PROFILE/node_modules/$pkg" ] || [ "$(fingerprint "$pkg")" != "${BEFORE[$pkg]}" ]; then
     echo "pnpm rewrote node_modules/$pkg; restoring the pre-install copy from desktop.$TAG.tgz"
@@ -132,7 +151,30 @@ for pkg in "${!BEFORE[@]}"; do
   fi
 done
 
+
+python3 "$PKG_DIR/lockfile_guard.py" "$PROFILE/pnpm-lock.yaml" "$NAME" > "$AFTER_LOCK" \
+  || die "lockfile guard: cannot re-extract pinned set from $PROFILE/pnpm-lock.yaml"
+if ! cmp -s "$BEFORE_LOCK" "$AFTER_LOCK"; then
+  echo "install_desktop: lockfile guard: locked packages or importer dependencies changed outside $NAME:" >&2
+  diff -u "$BEFORE_LOCK" "$AFTER_LOCK" >&2 || true
+  die "lockfile guard failed; restore path below reverts $PROFILE"
+fi
+
 [ -f "$PROFILE/node_modules/$NAME/lib/index.js" ] || die "pnpm did not install $NAME"
 [ -f "$PROFILE/node_modules/$NAME/cordis.patch.yml" ] || die "installed package lacks cordis.patch.yml"
+
+# Post-install summary.
+echo "=== post-install summary ==="
+echo "package.json: dsh-cite-sources -> $(node -p "require('$PROFILE/package.json').dependencies['$NAME']")"
+python3 - "$PKG_DIR/lockfile_guard.py" "$PROFILE/pnpm-lock.yaml" "$NAME" <<'EOF'
+import subprocess, sys
+out = subprocess.run([sys.executable, sys.argv[1], sys.argv[2], sys.argv[3]],
+                     capture_output=True, text=True, check=True).stdout
+for line in out.splitlines():
+    if line.split("\t", 1)[0].startswith(("P " + sys.argv[3], "I . " + sys.argv[3])):
+        print("lockfile:", line.replace("\t", "  "))
+EOF
+echo "dsh.profile.bundles: $(node -p "JSON.stringify(require('$PROFILE/package.json')['dsh.profile'].bundles)")"
+echo "dsh-recall fingerprint (after restore): $(fingerprint dsh-recall)"
 DONE=1
 echo "installed $NAME@$VERSION into $PROFILE; start the app and check that a web_search result shows [S1]."
