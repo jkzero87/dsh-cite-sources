@@ -68,3 +68,13 @@ test("reasoning and tool-call chunks pass through unchanged", async () => {
   for await (const c of rewriteStream(upstream(), () => ({ sources: {}, seen: [] }), MARKER)) out.push(c);
   assert.deepEqual(out, chunks);
 });
+
+test("path-prefix rule: verified only at a '/' boundary, same host, no query", async () => {
+  const { isVerifiedUrl } = await import("../lib/transducer.js");
+  const seen = new Set(["github.com/switchbrew/nx-hbmenu/releases/tag/v3.6.1"]);
+  assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hbmenu", seen), true);
+  assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hbmenu/", seen), true);
+  assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hb", seen), false);
+  assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hbmenu?tab=readme", seen), false);
+  assert.equal(isVerifiedUrl("https://gitlab.com/switchbrew/nx-hbmenu", seen), false);
+});

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { normalizeUrl, urlsIn } from "../lib/normalize.js";
-import { rewriteText } from "../lib/transducer.js";
+import { isVerifiedUrl, rewriteText } from "../lib/transducer.js";
 import { finalAnswers, LABELED_TOOLS, oracleClasses, oracleNormalize, readEvents, replayLabels, sessionPath } from "./sessions.js";
 
 const MARKER = " ⚠️(unverified)";
@@ -21,10 +21,7 @@ const replayOf = (sid) => {
 
 /** The transducer's URL rule alone: trailing backtick ends the URL; `.,;:*` is not part of it. */
 const coreOf = (raw) => raw.replace(/`+$/, "").replace(/[.,;:*]+$/, "");
-const isMarked = (raw, seen) => {
-  const norm = normalizeUrl(coreOf(raw));
-  return norm === null || !seen.has(norm);
-};
+const isMarked = (raw, seen) => !isVerifiedUrl(coreOf(raw), seen);
 
 function levenshteinRatio(a, b) {
   const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -117,18 +114,7 @@ test("test 3: unverified check alone over all url_audit URLs (confusion matrix)"
   for (const r of exactMarked) console.log(`  EXACT marked: ${r.sid} turn ${r.turn} ${r.raw}`);
   for (const r of nearUnmarked) console.log(`  NEAR unmarked: ${r.sid} turn ${r.turn} ${r.raw}`);
   for (const r of absentUnmarked) console.log(`  ABSENT unmarked: ${r.sid} turn ${r.turn} ${r.raw}`);
-  // url_audit's EXACT is a substring test. An EXACT URL the plugin marks must occur in the session's tool
-  // results only as the leading part of a longer URL, never as a URL of its own.
-  for (const r of exactMarked) {
-    const { events } = replayOf(r.sid);
-    const core = coreOf(r.raw);
-    const hits = events.filter((e) => e.type === "tool/result").flatMap((e) => [
-      ...(e.data.message.content ?? []).filter((c) => c.type === "text").flatMap((c) => [...urlsIn(c.text)]),
-      ...(e.data.meta?.sources ?? []).map((s) => s?.url).filter((u) => typeof u === "string"),
-    ]).filter((u) => u.includes(core));
-    console.log(`  EXACT marked ${core}: occurs only inside ${JSON.stringify([...new Set(hits)])}`);
-    assert.ok(hits.length > 0 && hits.every((u) => u !== core && u.startsWith(core) && u.length > core.length));
-  }
+  assert.equal(exactMarked.length, 0);
   assert.equal(absentUnmarked.length, 0);
 });
 
