@@ -3,7 +3,7 @@
  * the single ids `(S1)` and `(S3)`. Per spec the transducer must:
  *   - expand each group to SHORT links `[S#](<canonical url>)` in the model's SAME delimiters, with
  *     titles appearing ONLY in the `Fuentes:` block — `(S1)` → `([S1](url1))`,
- *     `(S2, S6)` → `([S2](url2), [S6](url6))`, `[S3]` → `[S3](url3)`;
+ *     `(S2, S6)` → `([S2](url2), [S6](url6))`, `(S3)` → `([S3](url3))`;
  *   - keep the answer otherwise verbatim;
  *   - append `\n\nFuentes:` and one `- [S#] <title> — <canonical url>` line per cited id, in
  *     first-citation order, at block end (so the deltas still concatenate to the end text);
@@ -26,14 +26,22 @@ const { state } = replayLabels(events);
 const answer = finalAnswers(events).get(1);
 assert.ok(answer.includes("(S2, S6)"), "fixture: the 17:06 answer must cite the group (S2, S6)");
 
-const u1 = state.sources[1].url;
-const u2 = state.sources[2].url;
-const u3 = state.sources[3].url;
-const u6 = state.sources[6].url;
-const t1 = state.sources[1].title;
-const t2 = state.sources[2].title;
-const t3 = state.sources[3].title;
-const t6 = state.sources[6].title;
+// Ground truth: the labels the model saw in the turn-1 web_search result (seq 20) of dbc5673f.
+const u1 = "https://es.wikipedia.org/wiki/Abelardo_de_la_Espriella";
+const u2 = "https://caracol.com.co/2026/06/21/abelardo-de-la-espriella-es-el-presidente-electo-de-colombia/";
+const u3 = "https://en.wikipedia.org/wiki/Abelardo_de_la_Espriella";
+const u6 = "https://www.colombia.com/actualidad/politica/abelardo-de-la-espriella-es-elegido-nuevo-presidente-de-colombia-588764";
+const t1 = "Abelardo de la Espriella - Wikipedia, la enciclopedia libre";
+const t2 = "Abelardo de la Espriella es el nuevo presidente de Colombia 2026-2030";
+const t3 = "Abelardo de la Espriella - Wikipedia";
+const t6 = "Abelardo de la Espriella es elegido nuevo presidente de Colombia";
+
+test("the replayed map is the one logged in the turn-1 web_search result", () => {
+  assert.deepEqual(state.sources[1], { url: u1, title: t1 });
+  assert.deepEqual(state.sources[2], { url: u2, title: t2 });
+  assert.deepEqual(state.sources[3], { url: u3, title: t3 });
+  assert.deepEqual(state.sources[6], { url: u6, title: t6 });
+});
 
 const opts = { sources: state.sources, seen: state.seen, marker: MARKER };
 

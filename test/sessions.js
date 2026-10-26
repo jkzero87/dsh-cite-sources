@@ -3,10 +3,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allocator, emptyState, foldEvent, labelContent } from "../lib/labels.js";
+import { allocator, createFold, emptyState, labelContent } from "../lib/labels.js";
 
 export const SESSIONS_ROOT = path.join(os.homedir(), ".local/share/deepseek-harness/sessions");
 export const LABELED_TOOLS = new Set(["web_search", "advanced_search", "platform_search", "web_fetch"]);
+/** The plugin's fold for the default tool set. */
+export const foldEvent = createFold(LABELED_TOOLS);
 const ORACLE = path.join(import.meta.dirname, "url_audit_export.py");
 
 /** Session file for an id or id prefix (`2516f527`). */

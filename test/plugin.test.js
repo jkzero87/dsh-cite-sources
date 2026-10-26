@@ -43,12 +43,13 @@ test("plugin: labels, rewrites only the agent-loop request, and traces to the fi
 
   const events = readEvents(sessionPath("2516f527"));
   const searchResult = events.find((e) => e.type === "tool/result");
+  log.push(events.find((e) => e.type === "tool/call" && e.data.callId === searchResult.data.message.toolCallId));
   const decision = await call("tools/post-execute",
     { name: "web_search", agent: { session }, parent: undefined },
     { isError: false, content: searchResult.data.message.content },
     async () => ({ kind: "accept" }));
   assert.match(decision.content[0].text, /- \[S1\] /);
-  log.push({ type: "tool/result", data: { message: { content: decision.content }, meta: searchResult.data.meta } });
+  log.push({ type: "tool/result", data: { message: { ...searchResult.data.message, content: decision.content }, meta: searchResult.data.meta } });
 
   const turnSignal = new AbortController().signal;
   await call("agent/request", { agent: { session }, turn: 1, step: 2, signal: turnSignal }, async () => ({ provider: "p", model: "m" }));
