@@ -2,3 +2,4 @@ node_modules/
 *.tgz
 test/out/
 test/run.txt
+*.bak*
