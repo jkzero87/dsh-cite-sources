@@ -1,0 +1,8 @@
+# dsh-cite-sources — citable source IDs for web tools, exact-URL substitution, unverified-URL marker.
+# Inserts one row; its config is optional (defaults shown).
+- insert:
+    - id: cite-sources
+      name: dsh-cite-sources
+      config:
+        tools: [ web_search, advanced_search, platform_search, web_fetch ]
+        marker: " ⚠️(unverified)"

@@ -1,0 +1,33 @@
+{
+  "name": "dsh-cite-sources",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: labels web tool sources as [S#], substitutes the exact URL for each [S#] the model cites, and marks answer URLs no tool result in the session returned.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "citations"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
+  }
+}
