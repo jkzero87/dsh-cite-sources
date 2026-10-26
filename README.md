@@ -38,6 +38,6 @@ A non-array `tools` or an empty `marker` fails at load.
 
 ## Known limits
 
-- Only `advanced_search` and `platform_search` lines and the fetch header get labels; links inside fetched pages keep their raw form. Only tool-web's `web_search` output carries the citation instruction line, so the other tools get labels without the instruction.
+- Only source lines and the fetch header get labels; links inside fetched pages keep their raw form. Only tool-web's `web_search` output carries the citation instruction line, so `advanced_search`, `platform_search` and `web_fetch` results get labels without the instruction.
 - `normalize_url` treats a decoded Bing redirect and its target as the same URL, so a model that decodes a redirect is not marked, and doubled `&&` in a Bing redirect query normalizes to the same target.
 - URLs the user typed in chat are not "seen"; only tool results count.
