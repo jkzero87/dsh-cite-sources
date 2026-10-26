@@ -83,6 +83,11 @@ export function oracleCanonical(requests) {
   return JSON.parse(execFileSync("python3", ["-I", ORACLE, "canonical"], { input: JSON.stringify(requests), maxBuffer: 1 << 26 }).toString("utf8"));
 }
 
+/** url_audit.py classes for an arbitrary answer text (e.g. the plugin-rewritten one) of a session. */
+export function oracleAnswerClasses(sidPrefix, answer, file = null) {
+  return JSON.parse(execFileSync("python3", ["-I", ORACLE, "answer-classes"], { input: JSON.stringify({ sid: sidPrefix, answer, file }), maxBuffer: 1 << 26 }).toString("utf8"));
+}
+
 /** Deterministic PRNG (mulberry32). */
 export function prng(seed) {
   let a = seed >>> 0;

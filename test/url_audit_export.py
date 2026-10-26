@@ -73,6 +73,51 @@ def canonical(requests):
     return out
 
 
+def _session_events(sid_prefix, file_path):
+    """(bodies, sources) for the session whose id starts with `sid_prefix`.
+
+    Finds the session the same way `test/sessions.js sessionPath()` does: the id is the
+    `session-<id>` DIRECTORY name, not the zstd file name, and it may sit in any session root
+    (desktop or the dsh-scratch working session, `--home-jkzero-dsh-scratch--`). Falls back to a
+    plain `.jsonl` decoded session under `~/dsh-scratch`."""
+    import json as _json
+    candidates = []
+    for root in (DESKTOP_ROOT, os.path.join(os.path.expanduser('~'), '.dsh', 'sessions')):
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, _files in os.walk(root):
+            if os.path.basename(dirpath).startswith(f'session-{sid_prefix}'):
+                zstd = os.path.join(dirpath, 'session.v4.jsonl.zstd')
+                if os.path.exists(zstd):
+                    candidates.append(zstd)
+                    break
+    if not candidates:
+        fallback = os.path.expanduser(file_path) if file_path else None
+        if fallback and fallback.endswith('.jsonl') and os.path.exists(fallback):
+            events = []
+            with open(fallback, encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        events.append(_json.loads(line))
+            bodies, sources, _answers = collect(events, 0, float('inf'))
+            return bodies, sources
+        raise SystemExit(f'no session {sid_prefix}')
+    events, _bad = read_session(candidates[0])
+    bodies, sources, _answers = collect(events, 0, float('inf'))
+    return bodies, sources
+
+
+def answer_classes(sid_prefix, answer, file_path=None):
+    """url_audit classes for an arbitrary answer text (e.g. the plugin-rewritten one) of a session."""
+    bodies, sources = _session_events(sid_prefix, file_path)
+    rows = []
+    for raw in sorted(urls_in(answer)):
+        cls, closest, _note = classify(raw, bodies, sources)
+        rows.append({'turn': None, 'raw': raw, 'cls': cls, 'closest': closest})
+    return rows
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'classes':
         json.dump(classes(), sys.stdout, ensure_ascii=False)
@@ -80,3 +125,6 @@ if __name__ == '__main__':
         json.dump([normalize_url(u) for u in json.load(sys.stdin)], sys.stdout, ensure_ascii=False)
     elif sys.argv[1] == 'canonical':
         json.dump(canonical(json.load(sys.stdin)), sys.stdout, ensure_ascii=False)
+    elif sys.argv[1] == 'answer-classes':
+        payload = json.load(sys.stdin)
+        json.dump(answer_classes(payload['sid'], payload['answer']), sys.stdout, ensure_ascii=False)
