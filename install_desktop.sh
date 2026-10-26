@@ -3,7 +3,12 @@
 #   1. tgz in $DSH_HOME/.local-packages/
 #   2. profiles/desktop/package.json: "dependencies" file: entry + "dsh.profile.bundles" entry (bundle patch = cordis.patch.yml)
 #   3. profiles/desktop/compatibility.json: plugin@version -> accepted DSH releases (copied from dsh-free-search's entry)
-#   4. pnpm install --offline in profiles/desktop (updates pnpm-lock.yaml and node_modules)
+#   4. pnpm install --offline in profiles/desktop (updates pnpm-lock.yaml and node_modules), with the pnpm that
+#      wrote the profile: node_modules/.modules.yaml records "packageManager": "pnpm@11.28.5", the version the app
+#      bundles (resources/runtime/versions.json, $DSH_HOME/dsh-runtimes/dsh-primary-runtime/runtime.json); PATH pnpm
+#      is used only when it reports that same version
+#   5. packages patched in place after their install (NEXT.md: dsh-recall lib/index.js from ce2df4a, dsh-compaction-select)
+#      are restored from the profile tarball if pnpm rewrote them
 # Refuses to run while the app (or anything else) has DSH_HOME open. Backs up every file it changes, plus a
 # tarball of the whole profile directory; on any failure after the backup it restores the profile directory from that tarball.
 set -euo pipefail
@@ -32,7 +37,24 @@ if command -v lsof >/dev/null && lsof +D "$DSH_HOME" 2>/dev/null | tail -n +2 | 
 fi
 
 [ -f "$PROFILE/package.json" ] || die "no profile at $PROFILE"
-command -v pnpm >/dev/null || die "pnpm not found"
+
+# The pnpm that wrote this profile.
+WANT_PNPM="$(grep -o '"packageManager": "pnpm@[^"]*"' "$PROFILE/node_modules/.modules.yaml" | head -1 | sed 's/.*pnpm@//; s/"$//')"
+[ -n "$WANT_PNPM" ] || die "cannot read packageManager from $PROFILE/node_modules/.modules.yaml"
+APP_DIR="${DSH_APP_DIR:-$HOME/Applications/DeepSeek-Harness}"
+PNPM=()
+for runtime in "$DSH_HOME/dsh-runtimes/dsh-primary-runtime/dependencies" "$APP_DIR/resources/runtime/primary-runtime/dependencies"; do
+  if [ -x "$runtime/node/bin/node" ] && [ -f "$runtime/pnpm/bin/pnpm.mjs" ] \
+    && [ "$(cd /tmp && "$runtime/node/bin/node" "$runtime/pnpm/bin/pnpm.mjs" --version 2>/dev/null)" = "$WANT_PNPM" ]; then
+    PNPM=("$runtime/node/bin/node" "$runtime/pnpm/bin/pnpm.mjs")
+    break
+  fi
+done
+if [ ${#PNPM[@]} -eq 0 ] && command -v pnpm >/dev/null && [ "$(cd /tmp && pnpm --version)" = "$WANT_PNPM" ]; then
+  PNPM=(pnpm)
+fi
+[ ${#PNPM[@]} -gt 0 ] || die "no pnpm $WANT_PNPM found (app runtime under $DSH_HOME/dsh-runtimes or $APP_DIR, or PATH)"
+echo "using pnpm $WANT_PNPM: ${PNPM[*]}"
 grep -q "\"$NAME\"" "$PROFILE/package.json" && die "$NAME is already in $PROFILE/package.json"
 
 # 2. Gate on the package's own tests (real session logs, no network).
@@ -91,8 +113,24 @@ compat[`${name}@${version}`] = reference[1];
 fs.writeFileSync(compatPath, `${JSON.stringify(compat, null, 2)}\n`);
 EOF
 
-# 6. Install from the local tgz only.
-(cd "$PROFILE" && pnpm install --offline)
+# 6. Install from the local tgz only. Packages that are real directories (not links) are fingerprinted first,
+#    because some were patched in place after install and a reinstall would revert them.
+fingerprint() { (cd "$PROFILE/node_modules" && find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-64); }
+declare -A BEFORE
+for dir in "$PROFILE"/node_modules/dsh-*; do
+  [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+  pkg="$(basename "$dir")"
+  BEFORE[$pkg]="$(fingerprint "$pkg")"
+done
+(cd "$PROFILE" && "${PNPM[@]}" install --offline)
+for pkg in "${!BEFORE[@]}"; do
+  if [ ! -d "$PROFILE/node_modules/$pkg" ] || [ "$(fingerprint "$pkg")" != "${BEFORE[$pkg]}" ]; then
+    echo "pnpm rewrote node_modules/$pkg; restoring the pre-install copy from desktop.$TAG.tgz"
+    rm -rf "$PROFILE/node_modules/$pkg"
+    tar -C "$DSH_HOME/profiles" -xzf "$DSH_HOME/profiles/desktop.$TAG.tgz" "desktop/node_modules/$pkg"
+    [ "$(fingerprint "$pkg")" = "${BEFORE[$pkg]}" ] || die "could not restore node_modules/$pkg"
+  fi
+done
 
 [ -f "$PROFILE/node_modules/$NAME/lib/index.js" ] || die "pnpm did not install $NAME"
 [ -f "$PROFILE/node_modules/$NAME/cordis.patch.yml" ] || die "installed package lacks cordis.patch.yml"

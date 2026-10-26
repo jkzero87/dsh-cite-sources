@@ -43,7 +43,7 @@ A non-array `tools`, an empty `marker` or `traceFile`, or a relative `traceFile`
 
 ## Install
 
-`./install_desktop.sh` installs into the desktop profile. It refuses to run while the app is open and backs up every file it changes.
+`./install_desktop.sh` installs into the desktop profile with the pnpm that wrote it (the app-bundled pnpm recorded in `node_modules/.modules.yaml`). It refuses to run while the app is open, backs up every file it changes, and restores in-place-patched plugin copies (dsh-recall, dsh-compaction-select) if pnpm rewrites them.
 
 ## Known limits
 
