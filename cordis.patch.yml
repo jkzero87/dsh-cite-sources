@@ -6,3 +6,5 @@
       config:
         tools: [ web_search, advanced_search, platform_search, web_fetch ]
         marker: " ⚠️(unverified)"
+        # Relative to the DeepSeek Harness home; the desktop host writes ctx.logger nowhere persistent.
+        traceFile: logs/cite-sources.log
