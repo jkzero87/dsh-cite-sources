@@ -3,12 +3,15 @@
 #   1. tgz in $DSH_HOME/.local-packages/
 #   2. profiles/desktop/package.json: "dependencies" file: entry + "dsh.profile.bundles" entry (bundle patch = cordis.patch.yml)
 #   3. profiles/desktop/compatibility.json: plugin@version -> accepted DSH releases (copied from dsh-free-search's entry)
-#   4. pnpm install --offline in profiles/desktop (updates pnpm-lock.yaml and node_modules), with the pnpm that
+#   4. pnpm install in profiles/desktop (updates pnpm-lock.yaml and node_modules; needs network), with the pnpm that
 #      wrote the profile: node_modules/.modules.yaml records "packageManager": "pnpm@11.28.5", the version the app
 #      bundles (resources/runtime/versions.json, $DSH_HOME/dsh-runtimes/dsh-primary-runtime/runtime.json); PATH pnpm
 #      is used only when it reports that same version
 #   5. packages patched in place after their install (NEXT.md: dsh-recall lib/index.js from ce2df4a, dsh-compaction-select)
 #      are restored from the profile tarball if pnpm rewrote them
+# Upgrade: when the profile already depends on $NAME through file:$LOCAL_PACKAGES/$NAME-<old>.tgz, the dependency,
+# the compatibility.json key and the lockfile move to the new version; the lockfile may change only in $NAME's own
+# entries, the installed copy must match the new tgz, and the old tgz is removed only after success.
 # Refuses to run while the app (or anything else) has DSH_HOME open. Backs up every file it changes, plus a
 # tarball of the whole profile directory; on any failure after the backup it restores the profile directory from that tarball.
 set -euo pipefail
@@ -68,7 +71,23 @@ NODE="${PNPM[0]}"
     .catch(e => { clearTimeout(t); console.error('registry fetch failed:', e.message); process.exit(1); });
 " || die "network precheck failed: could not fetch https://registry.npmjs.org/@deepseek-ai/cosmokit within 10 s; this install needs network (no --offline), check connectivity and retry"
 
-grep -q "\"$NAME\"" "$PROFILE/package.json" && die "$NAME is already in $PROFILE/package.json"
+MODE=install
+OLD_VERSION=""
+OLD_TGZ=""
+if grep -q "\"$NAME\"" "$PROFILE/package.json"; then
+  OLD_SPEC="$(node -p "require('$PROFILE/package.json').dependencies?.['$NAME'] ?? ''")"
+  case "$OLD_SPEC" in
+    "file:$LOCAL_PACKAGES/$NAME-"*.tgz) ;;
+    *) die "$NAME is in $PROFILE/package.json but not as file:$LOCAL_PACKAGES/$NAME-<version>.tgz (found '$OLD_SPEC')" ;;
+  esac
+  OLD_TGZ="${OLD_SPEC#file:}"
+  OLD_VERSION="${OLD_TGZ##*/"$NAME"-}"
+  OLD_VERSION="${OLD_VERSION%.tgz}"
+  [ "$OLD_VERSION" != "$VERSION" ] || die "$NAME@$VERSION is already installed; bump the version in $PKG_DIR/package.json"
+  [ -f "$OLD_TGZ" ] || die "the installed dependency's tgz $OLD_TGZ is missing"
+  MODE=upgrade
+  echo "upgrading $NAME $OLD_VERSION -> $VERSION"
+fi
 
 # 2. Gate on the package's own tests (real session logs, no network).
 (cd "$PKG_DIR" && npm test >/dev/null) || die "npm test failed in $PKG_DIR"
@@ -109,9 +128,9 @@ if [ ! -e "$TGZ" ]; then
 fi
 
 # 5. package.json and compatibility.json (JSON edits; key order otherwise preserved).
-node - "$PROFILE" "$NAME" "$VERSION" "$TGZ" <<'EOF'
+node - "$PROFILE" "$NAME" "$VERSION" "$TGZ" "$OLD_VERSION" <<'EOF'
 const fs = require("node:fs");
-const [profile, name, version, tgz] = process.argv.slice(2);
+const [profile, name, version, tgz, oldVersion] = process.argv.slice(2);
 const pkgPath = `${profile}/package.json`;
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 pkg.dependencies[name] = `file:${tgz}`;
@@ -120,19 +139,28 @@ if (!bundles.includes(name)) bundles.push(name);
 fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 const compatPath = `${profile}/compatibility.json`;
 const compat = JSON.parse(fs.readFileSync(compatPath, "utf8"));
-const reference = Object.entries(compat).find(([k]) => k.startsWith("dsh-free-search@"));
-if (!reference) throw new Error("no dsh-free-search entry in compatibility.json to copy DSH releases from");
-compat[`${name}@${version}`] = reference[1];
+if (oldVersion) {
+  const releases = compat[`${name}@${oldVersion}`];
+  if (!releases) throw new Error(`no ${name}@${oldVersion} entry in compatibility.json to carry over`);
+  delete compat[`${name}@${oldVersion}`];
+  compat[`${name}@${version}`] = releases;
+} else {
+  const reference = Object.entries(compat).find(([k]) => k.startsWith("dsh-free-search@"));
+  if (!reference) throw new Error("no dsh-free-search entry in compatibility.json to copy DSH releases from");
+  compat[`${name}@${version}`] = reference[1];
+}
 fs.writeFileSync(compatPath, `${JSON.stringify(compat, null, 2)}\n`);
 EOF
 
 # 6. Install from the local tgz only. Packages that are real directories (not links) are fingerprinted first,
-#    because some were patched in place after install and a reinstall would revert them.
+#    because some were patched in place after install and a reinstall would revert them. $NAME itself is the
+#    package being replaced, so it is not fingerprinted.
 fingerprint() { (cd "$PROFILE/node_modules" && find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-64); }
 declare -A BEFORE
 for dir in "$PROFILE"/node_modules/dsh-*; do
   [ -d "$dir" ] && [ ! -L "$dir" ] || continue
   pkg="$(basename "$dir")"
+  [ "$pkg" != "$NAME" ] || continue
   BEFORE[$pkg]="$(fingerprint "$pkg")"
 done
 
@@ -160,21 +188,55 @@ if ! cmp -s "$BEFORE_LOCK" "$AFTER_LOCK"; then
   die "lockfile guard failed; restore path below reverts $PROFILE"
 fi
 
+# Upgrade lockfile guard: the new lockfile must equal the pre-install one with $NAME-$OLD_VERSION.tgz renamed to
+# $NAME-$VERSION.tgz and $NAME's resolution integrity replaced by the new tgz's sha512; any other change fails.
+if [ "$MODE" = upgrade ]; then
+  python3 - "$PROFILE/pnpm-lock.yaml.$TAG" "$PROFILE/pnpm-lock.yaml" "$NAME" "$OLD_VERSION" "$VERSION" "$TGZ" <<'EOF' \
+    || die "lockfile guard: pnpm-lock.yaml changed outside $NAME's own entries"
+import base64, difflib, hashlib, re, sys
+before_path, after_path, name, old, new, tgz = sys.argv[1:]
+before = open(before_path, encoding="utf-8").read()
+after = open(after_path, encoding="utf-8").read()
+integrity = "sha512-" + base64.b64encode(hashlib.sha512(open(tgz, "rb").read()).digest()).decode()
+old_file = re.escape(f"{name}-{old}.tgz")
+expected, n = re.subn(r"(resolution: \{integrity: )sha512-[A-Za-z0-9+/=]+(, tarball: file:[^}]*/" + old_file + r"\})",
+                      lambda m: m.group(1) + integrity + m.group(2), before)
+if n != 1:
+    sys.exit(f"lockfile guard: expected one {name}-{old}.tgz resolution in the pre-install lockfile, found {n}")
+expected = expected.replace(f"{name}-{old}.tgz", f"{name}-{new}.tgz")
+if after != expected:
+    sys.stderr.writelines(difflib.unified_diff(expected.splitlines(True), after.splitlines(True), "expected", "pnpm-lock.yaml"))
+    sys.exit(1)
+EOF
+fi
+
 [ -f "$PROFILE/node_modules/$NAME/lib/index.js" ] || die "pnpm did not install $NAME"
 [ -f "$PROFILE/node_modules/$NAME/cordis.patch.yml" ] || die "installed package lacks cordis.patch.yml"
+INSTALLED_VERSION="$(node -p "require('$PROFILE/node_modules/$NAME/package.json').version")"
+[ "$INSTALLED_VERSION" = "$VERSION" ] || die "node_modules/$NAME is version $INSTALLED_VERSION, expected $VERSION"
+WANT_LABELS="$(tar -xzOf "$TGZ" package/lib/labels.js | sha256sum | cut -c1-64)"
+GOT_LABELS="$(sha256sum < "$PROFILE/node_modules/$NAME/lib/labels.js" | cut -c1-64)"
+[ "$GOT_LABELS" = "$WANT_LABELS" ] || die "node_modules/$NAME/lib/labels.js sha256 $GOT_LABELS differs from the new tgz's $WANT_LABELS"
 
 # Post-install summary.
 echo "=== post-install summary ==="
 echo "package.json: dsh-cite-sources -> $(node -p "require('$PROFILE/package.json').dependencies['$NAME']")"
 python3 - "$PKG_DIR/lockfile_guard.py" "$PROFILE/pnpm-lock.yaml" "$NAME" <<'EOF'
 import subprocess, sys
-out = subprocess.run([sys.executable, sys.argv[1], sys.argv[2], sys.argv[3]],
+# Exclude a name no package has, so the guard prints $NAME's own lines for this filter.
+out = subprocess.run([sys.executable, sys.argv[1], sys.argv[2], "--no-such-package--"],
                      capture_output=True, text=True, check=True).stdout
 for line in out.splitlines():
     if line.split("\t", 1)[0].startswith(("P " + sys.argv[3], "I . " + sys.argv[3])):
         print("lockfile:", line.replace("\t", "  "))
 EOF
-echo "dsh.profile.bundles: $(node -p "JSON.stringify(require('$PROFILE/package.json')['dsh.profile'].bundles)")"
+echo "dsh.profile.bundles: $(node -p "JSON.stringify(require('$PROFILE/package.json').dsh.profile.bundles)")"
+echo "compatibility.json: $(node -p "JSON.stringify(Object.keys(require('$PROFILE/compatibility.json')).filter((k) => k.startsWith('$NAME@')))")"
+echo "node_modules/$NAME: version $INSTALLED_VERSION, lib/labels.js sha256 $GOT_LABELS"
 echo "dsh-recall fingerprint (after restore): $(fingerprint dsh-recall)"
 DONE=1
+if [ "$MODE" = upgrade ]; then
+  rm -f "$OLD_TGZ"
+  echo "removed $OLD_TGZ"
+fi
 echo "installed $NAME@$VERSION into $PROFILE; start the app and check that a web_search result shows [S1]."
