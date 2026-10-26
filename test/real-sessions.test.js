@@ -3,12 +3,14 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeUrl, urlsIn } from "../lib/normalize.js";
+import { canonicalUrl, normalizeUrl, urlsIn } from "../lib/normalize.js";
 import { isVerifiedUrl, rewriteText } from "../lib/transducer.js";
-import { finalAnswers, LABELED_TOOLS, oracleClasses, oracleNormalize, readEvents, replayLabels, sessionPath } from "./sessions.js";
+import { finalAnswers, LABELED_TOOLS, oracleCanonical, oracleClasses, oracleNormalize, readEvents, replayLabels, sessionPath } from "./sessions.js";
 
 const MARKER = " ⚠️(unverified)";
-const DETAIL_SESSIONS = ["2516f527", "caf6378d", "f0d2a1d6", "ed68c8f7", "1dd30925"];
+const DETAIL_SESSIONS = ["2516f527", "caf6378d", "f0d2a1d6", "ed68c8f7", "1dd30925", "0388bf95", "1ebdc841"];
+// Sessions whose NEAR citations normalize to a seen URL (decoded redirects, `&&`): the emitted URL must be canonical.
+const CANONICAL_SESSIONS = new Set(["ed68c8f7", "0388bf95", "1ebdc841"]);
 const rows = oracleClasses();
 const replays = new Map();
 const replayOf = (sid) => {
@@ -21,7 +23,7 @@ const replayOf = (sid) => {
 
 /** The transducer's URL rule alone: trailing backtick ends the URL; `.,;:*` is not part of it. */
 const coreOf = (raw) => raw.replace(/`+$/, "").replace(/[.,;:*]+$/, "");
-const isMarked = (raw, seen) => !isVerifiedUrl(coreOf(raw), seen);
+const isMarked = (raw, seenKeys) => !isVerifiedUrl(coreOf(raw), seenKeys);
 
 function levenshteinRatio(a, b) {
   const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -63,34 +65,45 @@ test("normalizeUrl matches compare.py normalize_url on every real URL in the det
 
 for (const sid of DETAIL_SESSIONS) {
   test(`test 2: cited URLs of ${sid} — original, plugin output, url_audit class`, () => {
-    const fullSid = `session-${sid}`;
-    const { events, state, labeledResults } = replayOf(rows.find((r) => r.sid.startsWith(fullSid))?.sid ?? fullSid);
-    const seen = new Set(state.seen);
+    const fullSid = rows.find((r) => r.sid.startsWith(`session-${sid}`))?.sid ?? `session-${sid}`;
+    const { events, state, labeledResults } = replayOf(fullSid);
+    const seenKeys = new Set(Object.keys(state.seen));
     const answers = finalAnswers(events);
-    const mine = rows.filter((r) => r.sid.startsWith(fullSid));
-    console.log(`\n== ${sid}: ${labeledResults} labeled tool results, ${Object.keys(state.sources).length} labels, ${seen.size} seen URLs, ${mine.length} cited URLs`);
+    const mine = rows.filter((r) => r.sid === fullSid);
+    const candidates = oracleCanonical(mine.map((r) => ({ sid: r.sid, raw: coreOf(r.raw) })));
+    console.log(`\n== ${sid}: ${labeledResults} labeled tool results, ${Object.keys(state.sources).length} labels, ${seenKeys.size} seen URLs, ${mine.length} cited URLs`);
     const failures = [];
-    for (const row of mine) {
-      const answer = answers.get(row.turn);
-      const out = rewriteText(answer, { sources: state.sources, seen, marker: MARKER });
-      const marked = isMarked(row.raw, seen);
+    mine.forEach((row, i) => {
+      const decisions = [];
+      rewriteText(answers.get(row.turn), { sources: state.sources, seen: state.seen, marker: MARKER, onDecision: (d) => decisions.push(d) });
       const core = coreOf(row.raw);
-      const at = out.indexOf(core);
-      const shown = at === -1 ? "(not found)" : out.slice(at, at + core.length + MARKER.length + 2).replace(/\n/g, "⏎");
+      const d = decisions.find((x) => x.kind === "url" && x.input === core);
+      const oracle = candidates[i];
+      const fail = (why) => failures.push({ sid, turn: row.turn, cls: row.cls, raw: row.raw, verdict: d?.verdict, output: d?.output, why });
       let counterfactual = "";
-      if (row.cls === "NEAR") {
-        const [id, src] = Object.entries(state.sources)
-          .map(([k, s]) => [k, s, levenshteinRatio(s.url, core)])
-          .sort((a, b) => b[2] - a[2])[0] ?? [];
-        const cf = id === undefined ? "(no labeled source)" : rewriteText(`[S${id}]`, { sources: state.sources, seen, marker: MARKER });
-        counterfactual = ` | as [S${id}] -> ${cf}`;
-        if (!marked && !(src && cf === `[${src.title || src.url}](${src.url})`)) failures.push(row);
+      if (d === undefined) fail("transducer did not see this URL");
+      else {
+        if (d.verdict === "exact" || d.verdict === "canonicalized") {
+          if (!oracle.includes(d.output)) fail(`emitted ${d.output} not in oracle ${JSON.stringify(oracle)}`);
+        }
+        if (row.cls === "EXACT" && d.verdict === "marked") fail("EXACT marked");
+        if (row.cls === "ABSENT" && d.verdict !== "marked") fail("ABSENT not marked");
+        if (row.cls === "NEAR") {
+          const [id, src] = Object.entries(state.sources)
+            .map(([k, s]) => [k, s, levenshteinRatio(canonicalUrl(s.url), core)])
+            .sort((a, b) => b[2] - a[2])[0] ?? [];
+          const cf = id === undefined ? "(no labeled source)" : rewriteText(`[S${id}]`, { sources: state.sources, seen: state.seen, marker: MARKER });
+          counterfactual = `\n         as [S${id}] -> ${cf}`;
+          const cfExact = src !== undefined && cf === `[${src.title || src.url}](${canonicalUrl(src.url)})`;
+          const canonicalOut = (d.verdict === "canonicalized" || d.verdict === "exact") && oracle.includes(d.output);
+          if (d.verdict !== "marked" && !canonicalOut && !cfExact) fail("NEAR neither marked, canonical, nor exact as [S#]");
+          if (CANONICAL_SESSIONS.has(sid) && oracle.length > 0 && !canonicalOut) fail("NEAR with a seen equivalent was not emitted canonically");
+          if (oracle.length === 0 && d.verdict !== "marked" && d.verdict !== "prefix") fail("NEAR without a seen equivalent was not marked");
+        }
       }
-      if (row.cls === "EXACT" && marked) failures.push(row);
-      if (row.cls === "ABSENT" && !marked) failures.push(row);
-      console.log(`  ${row.cls.padEnd(6)} turn ${row.turn} ${marked ? "MARKED  " : "unmarked"} cited: ${row.raw}`);
-      console.log(`         plugin: ${shown}${counterfactual}`);
-    }
+      console.log(`  ${row.cls.padEnd(6)} turn ${row.turn} ${String(d?.verdict).padEnd(13)} cited:   ${row.raw}`);
+      console.log(`         plugin: ${d?.output}${counterfactual}`);
+    });
     assert.deepEqual(failures, []);
   });
 }
@@ -102,7 +115,7 @@ test("test 3: unverified check alone over all url_audit URLs (confusion matrix)"
   const absentUnmarked = [];
   for (const row of rows) {
     const { state } = replayOf(row.sid);
-    const marked = isMarked(row.raw, new Set(state.seen));
+    const marked = isMarked(row.raw, new Set(Object.keys(state.seen)));
     matrix[row.cls][marked ? "marked" : "unmarked"]++;
     if (row.cls === "EXACT" && marked) exactMarked.push(row);
     if (row.cls === "NEAR" && !marked) nearUnmarked.push(row);

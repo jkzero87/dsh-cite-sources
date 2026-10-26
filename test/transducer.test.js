@@ -52,7 +52,7 @@ test("a block end that disagrees with its deltas is rejected", async () => {
     yield { type: "block-end", index: 0, block: { type: "text", text: "abd" } };
   }
   await assert.rejects(async () => {
-    for await (const _ of rewriteStream(upstream(), () => ({ sources: {}, seen: [] }), MARKER));
+    for await (const _ of rewriteStream(upstream(), () => ({ sources: {}, seen: {} }), MARKER));
   }, /differs from its streamed deltas/);
 });
 
@@ -65,7 +65,7 @@ test("reasoning and tool-call chunks pass through unchanged", async () => {
   ];
   async function* upstream() { yield* chunks; }
   const out = [];
-  for await (const c of rewriteStream(upstream(), () => ({ sources: {}, seen: [] }), MARKER)) out.push(c);
+  for await (const c of rewriteStream(upstream(), () => ({ sources: {}, seen: {} }), MARKER)) out.push(c);
   assert.deepEqual(out, chunks);
 });
 

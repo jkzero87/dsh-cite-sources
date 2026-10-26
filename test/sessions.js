@@ -78,6 +78,11 @@ export function oracleNormalize(urls) {
   return JSON.parse(execFileSync("python3", ["-I", ORACLE, "normalize"], { input: JSON.stringify(urls), maxBuffer: 1 << 26 }).toString("utf8"));
 }
 
+/** Decoded spellings (compare.py rules, Python) of the seen URLs each cited `{sid, raw}` normalizes to. */
+export function oracleCanonical(requests) {
+  return JSON.parse(execFileSync("python3", ["-I", ORACLE, "canonical"], { input: JSON.stringify(requests), maxBuffer: 1 << 26 }).toString("utf8"));
+}
+
 /** Deterministic PRNG (mulberry32). */
 export function prng(seed) {
   let a = seed >>> 0;
