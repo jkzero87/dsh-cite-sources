@@ -189,7 +189,8 @@ if ! cmp -s "$BEFORE_LOCK" "$AFTER_LOCK"; then
 fi
 
 # Upgrade lockfile guard: the new lockfile must equal the pre-install one with $NAME-$OLD_VERSION.tgz renamed to
-# $NAME-$VERSION.tgz and $NAME's resolution integrity replaced by the new tgz's sha512; any other change fails.
+# $NAME-$VERSION.tgz everywhere and, in $NAME's own packages entry only, the resolution integrity replaced by the new
+# tgz's sha512 and `version: $OLD_VERSION` by `version: $VERSION`; any other change fails.
 if [ "$MODE" = upgrade ]; then
   python3 - "$PROFILE/pnpm-lock.yaml.$TAG" "$PROFILE/pnpm-lock.yaml" "$NAME" "$OLD_VERSION" "$VERSION" "$TGZ" <<'EOF' \
     || die "lockfile guard: pnpm-lock.yaml changed outside $NAME's own entries"
@@ -199,11 +200,17 @@ before = open(before_path, encoding="utf-8").read()
 after = open(after_path, encoding="utf-8").read()
 integrity = "sha512-" + base64.b64encode(hashlib.sha512(open(tgz, "rb").read()).digest()).decode()
 old_file = re.escape(f"{name}-{old}.tgz")
-expected, n = re.subn(r"(resolution: \{integrity: )sha512-[A-Za-z0-9+/=]+(, tarball: file:[^}]*/" + old_file + r"\})",
-                      lambda m: m.group(1) + integrity + m.group(2), before)
-if n != 1:
-    sys.exit(f"lockfile guard: expected one {name}-{old}.tgz resolution in the pre-install lockfile, found {n}")
-expected = expected.replace(f"{name}-{old}.tgz", f"{name}-{new}.tgz")
+# The packages entry: its key line and the indented lines below it, up to the blank line that ends it.
+entry = re.compile(r"^  " + re.escape(name) + r"@file:[^\n]*/" + old_file + r":\n(?:    [^\n]*\n)*", re.M)
+found = entry.findall(before)
+if len(found) != 1:
+    sys.exit(f"lockfile guard: expected one {name}-{old}.tgz packages entry in the pre-install lockfile, found {len(found)}")
+block, n_int = re.subn(r"(resolution: \{integrity: )sha512-[A-Za-z0-9+/=]+(, tarball: file:[^}]*/" + old_file + r"\})",
+                       lambda m: m.group(1) + integrity + m.group(2), found[0])
+block, n_ver = re.subn(r"^    version: " + re.escape(old) + r"$", f"    version: {new}", block, flags=re.M)
+if n_int != 1 or n_ver != 1:
+    sys.exit(f"lockfile guard: {name}'s entry has {n_int} resolution and {n_ver} version lines; expected one of each")
+expected = before.replace(found[0], block).replace(f"{name}-{old}.tgz", f"{name}-{new}.tgz")
 if after != expected:
     sys.stderr.writelines(difflib.unified_diff(expected.splitlines(True), after.splitlines(True), "expected", "pnpm-lock.yaml"))
     sys.exit(1)
