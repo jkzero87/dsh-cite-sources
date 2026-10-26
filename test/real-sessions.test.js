@@ -92,9 +92,9 @@ for (const sid of DETAIL_SESSIONS) {
           const [id, src] = Object.entries(state.sources)
             .map(([k, s]) => [k, s, levenshteinRatio(canonicalUrl(s.url), core)])
             .sort((a, b) => b[2] - a[2])[0] ?? [];
-          const cf = id === undefined ? "(no labeled source)" : rewriteText(`[S${id}]`, { sources: state.sources, seen: state.seen, marker: MARKER });
+          const cf = id === undefined ? "(no labeled source)" : rewriteText(`[S${id}]`, { sources: state.sources, seen: state.seen, marker: MARKER }).split("\n\nFuentes:")[0];
           counterfactual = `\n         as [S${id}] -> ${cf}`;
-          const cfExact = src !== undefined && cf === `[${src.title || src.url}](${canonicalUrl(src.url)})`;
+          const cfExact = src !== undefined && cf === `[S${id}](${canonicalUrl(src.url)})`;
           const canonicalOut = (d.verdict === "canonicalized" || d.verdict === "exact") && oracle.includes(d.output);
           if (d.verdict !== "marked" && !canonicalOut && !cfExact) fail("NEAR neither marked, canonical, nor exact as [S#]");
           if (CANONICAL_SESSIONS.has(sid) && oracle.length > 0 && !canonicalOut) fail("NEAR with a seen equivalent was not emitted canonically");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CITE_LINE_TO, allocator, emptyState, labelContent } from "../lib/labels.js";
 import { rewriteStream } from "../lib/stream.js";
-import { rewriteText } from "../lib/transducer.js";
+import { createTransducer, rewriteText } from "../lib/transducer.js";
 import { randomChunks } from "./sessions.js";
 
 const MARKER = " ⚠️(unverified)";
@@ -22,8 +22,22 @@ test("groups with every separator: comma, semicolon, space, y, and", () => {
   assert.equal(body("x (S2 S6)."), `x (${L2} ${L6}).`);
   assert.equal(body("x (S2 y S6)."), `x (${L2} y ${L6}).`);
   assert.equal(body("x (S2 and S6)."), `x (${L2} and ${L6}).`);
-  assert.equal(body("x [S2, S6]."), `x [${L2}, ${L6}].`);
   assert.equal(body("x (S2S6) (hello) (S2."), "x (S2S6) (hello) (S2.");
+});
+
+test("bracket groups become the links themselves; parentheses are kept", () => {
+  assert.equal(body("x [S2]."), `x ${L2}.`);
+  assert.equal(body("x [S2, S6]."), `x ${L2}, ${L6}.`);
+  assert.equal(body("x [S2][S6]."), `x ${L2}, ${L6}.`);
+  assert.equal(body("x [S2] [S6]."), `x ${L2} ${L6}.`);
+  assert.equal(body("x (S2)."), `x (${L2}).`);
+  assert.equal(body("x [S9]."), "x S9 ⚠️(unknown source).");
+});
+
+test("text after a citation group streams without waiting for the block end", () => {
+  const t = createTransducer(opts);
+  assert.equal(t.push("a (S2) b [S6] c "), `a (${L2}) b ${L6} c `);
+  assert.equal(t.flush(), "\n\nFuentes:\n- [S2] Two — https://a.example/two\n- [S6] Six — https://b.example/six");
 });
 
 test("an unknown id becomes `S9 ⚠️(unknown source)` and is left out of Fuentes", () => {
