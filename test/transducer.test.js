@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { rewriteStream } from "../lib/stream.js";
 import { rewriteText } from "../lib/transducer.js";
-import { finalAnswers, randomChunks, readEvents, replayLabels, sessionPath } from "./sessions.js";
+import { finalAnswers, foldEvent, randomChunks, readEvents, replayLabels, sessionPath } from "./sessions.js";
 
 const SESSIONS = ["2516f527", "caf6378d", "f0d2a1d6", "ed68c8f7", "1dd30925"];
 const SEEDS = [1, 2, 3, 7, 42, 1234, 99991, 2026];
@@ -77,4 +77,25 @@ test("path-prefix rule: verified only at a '/' boundary, same host, no query", a
   assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hb", seen), false);
   assert.equal(isVerifiedUrl("https://github.com/switchbrew/nx-hbmenu?tab=readme", seen), false);
   assert.equal(isVerifiedUrl("https://gitlab.com/switchbrew/nx-hbmenu", seen), false);
+});
+
+test("a final .git is the same repository URL (real case: session 27505c64, bash result seq 121)", async () => {
+  const { isVerifiedUrl } = await import("../lib/transducer.js");
+  const { normalizeUrl } = await import("../lib/normalize.js");
+  const { emptyState } = await import("../lib/labels.js");
+  const events = readEvents(sessionPath("27505c64"));
+  const result = events.find((e) => e.seq === 121);
+  assert.ok(result && result.type === "tool/result" && !result.data.message.isError, "seq 121 is the bash result");
+  const text = result.data.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+  assert.ok(text.includes("https://github.com/jkzero87/biblioteca.git"), "seq 121 logged the .git remote URL");
+  const state = foldEvent(emptyState(), result);
+  const seenKeys = new Set(Object.keys(state.seen));
+  assert.equal(isVerifiedUrl("https://github.com/jkzero87/biblioteca", seenKeys), true, "cited without .git verifies against the .git result");
+  assert.ok(!rewriteText("El repo está en https://github.com/jkzero87/biblioteca.", { sources: state.sources, seen: state.seen, marker: MARKER }).includes(MARKER));
+  assert.equal(isVerifiedUrl("https://github.com/torvalds/linux", seenKeys), false, "a GitHub URL never in any result is unverified");
+  assert.ok(rewriteText("Ver https://github.com/torvalds/linux también.", { sources: state.sources, seen: state.seen, marker: MARKER }).includes(MARKER));
+  assert.equal(normalizeUrl("https://github.com/jkzero87/biblioteca.git"), "github.com/jkzero87/biblioteca");
+  assert.equal(normalizeUrl("https://github.com/jkzero87/biblioteca"), "github.com/jkzero87/biblioteca");
+  assert.equal(normalizeUrl("https://foo.github.io/x"), "foo.github.io/x");
+  assert.equal(normalizeUrl("https://example.com/a/x.gitignore"), "example.com/a/x.gitignore");
 });
