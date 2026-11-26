@@ -1,7 +1,11 @@
 /**
  * Fold invariant over every desktop session with labels: after each logged result of a labeled tool, the
- * fold maps every `[S#] <title> — <url>` (or `Fetched [S#] <url>`) line of that result to exactly that url
- * and title; at the end of the session the map still holds those sources and no other ids; an id is never logged for two sources.
+ * fold maps every `[S#] <title> — <url>` (or `Fetched [S#] <url>`) line of that result to exactly that url,
+ * and to the title of the first line that logged the id; at the end of the session the map still holds those
+ * sources and no other ids; an id is never logged for two urls.
+ *
+ * A url labeled earlier keeps its label (README), so a later search that returns the same url logs the same
+ * id with that search's own title (8ef4d154 S16, S25 and 907fd2cd S1 on 2026-11-06); the fold keeps the first.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -49,12 +53,13 @@ test("fold invariant: each labeled result's logged lines are exactly the fold ma
       if (labels.length === 0) continue;
       labeledResults++;
       for (const { id, url, title } of labels) {
-        const got = state.sources[id];
-        if (got?.url !== url || got?.title !== title) {
-          violations.push(`${sid} seq=${e.seq} S${id}: logged ${url} | ${title} ; fold ${got?.url} | ${got?.title}`);
-        }
         if (!logged.has(id)) logged.set(id, { url, title });
         else if (logged.get(id).url !== url) violations.push(`${sid} seq=${e.seq} S${id} reused: ${logged.get(id).url} then ${url}`);
+        const first = logged.get(id);
+        const got = state.sources[id];
+        if (got?.url !== url || got?.title !== first.title) {
+          violations.push(`${sid} seq=${e.seq} S${id}: logged ${url} | ${title} (first title ${first.title}) ; fold ${got?.url} | ${got?.title}`);
+        }
       }
     }
     if (labeledResults === 0) continue;

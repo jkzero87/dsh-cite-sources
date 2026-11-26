@@ -1,6 +1,7 @@
 """Test oracle (read-only): url_audit.py classes and compare.py normalize_url, printed as JSON.
 
-  python3 url_audit_export.py classes   -> [{sid, turn, raw, cls, closest}] for the fixed window 2026-10-13..2026-10-26
+  python3 url_audit_export.py classes   -> [{sid, turn, raw, cls, closest}] for the fixed window 2026-10-13 00:00 to
+                                           2026-10-26 15:41:15 (-05:00), the moment the 125 URLs were recorded (d05bd58)
   python3 url_audit_export.py normalize -> reads a JSON list of URLs on stdin, prints [normalize_url(u)]
   python3 url_audit_export.py canonical -> reads [{sid, raw}] on stdin, prints for each the sorted list of
                                            decoded spellings of the seen URLs whose normalize_url equals the cited one
@@ -17,8 +18,10 @@ sys.path.insert(0, os.path.expanduser('~/dsh-compare'))
 from compare import normalize_url, read_session, session_files, urls_in  # noqa: E402
 from url_audit import DESKTOP_ROOT, classify, collect  # noqa: E402
 
-START = dt.datetime(2026, 10, 13)
-END = dt.datetime(2026, 10, 27)
+BOGOTA = dt.timezone(dt.timedelta(hours=-5))
+# Answers given after the 125 were recorded (three sessions at 18:40-18:49 the same day) fall outside the window.
+START = dt.datetime(2026, 10, 13, tzinfo=BOGOTA)
+END = dt.datetime(2026, 10, 26, 15, 41, 15, tzinfo=BOGOTA)
 
 
 def classes():

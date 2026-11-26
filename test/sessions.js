@@ -70,7 +70,7 @@ export function replayLabels(events) {
   return { state, labeledResults };
 }
 
-/** url_audit.py classes for the fixed 14-day window. */
+/** url_audit.py classes for the fixed window 2026-10-13 to the 2026-10-26 15:41:15 measurement. */
 export function oracleClasses() {
   return JSON.parse(execFileSync("python3", ["-I", ORACLE, "classes"], { maxBuffer: 1 << 26 }).toString("utf8"));
 }
